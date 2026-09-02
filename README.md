@@ -2,7 +2,9 @@
 
 Builds and publishes an **aarch64 (ARM64) AppImage** of [Aqloss](https://github.com/nokarin-dev/Aqloss), a Flutter + Rust lossless music player that upstream currently ships only as x86_64 on Linux.
 
-This is a third-party CI wrapper, not affiliated with the Aqloss author. It doesn't fork or modify the app — it checks out the upstream source at a given tag and compiles it as-is.
+This is a third-party CI wrapper, not affiliated with the Aqloss author. It doesn't fork or modify the app — it checks out the upstream source at a given tag and compiles it as-is.  
+
+Obviusly i don't made aqloss, all credits go to [nokarin](https://www.nokarin.xyz/)
 
 ## How it works
 
