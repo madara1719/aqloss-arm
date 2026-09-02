@@ -90,11 +90,28 @@ jobs:
             libasound2-dev libpulse-dev \
             dpkg-dev fakeroot wget file
 
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.x"
-          channel: stable
-          cache: true
+      # subosito/flutter-action doesn't work here: Google only publishes
+      # precompiled Flutter SDK bundles for linux-x64 (not linux-arm64), so
+      # the action's version-resolution step 404s. The Flutter *tool* itself
+      # does support running natively on an arm64 host (this is the standard
+      # way people build Flutter apps on Raspberry Pi 5) - it just has to be
+      # installed via a plain git clone instead of a prebuilt archive, and
+      # then it self-downloads the correct arm64 engine artifacts.
+      - name: Install Flutter SDK (git, native aarch64 host)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 -b stable https://github.com/flutter/flutter.git "${HOME}/flutter"
+          echo "${HOME}/flutter/bin" >> "$GITHUB_PATH"
+          echo "${HOME}/flutter/bin/cache/dart-sdk/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter precache & doctor
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${HOME}/flutter"
+          flutter config --no-analytics
+          flutter config --enable-linux-desktop
+          flutter precache --linux
+          flutter doctor -v
 
       - uses: dtolnay/rust-toolchain@stable
 
