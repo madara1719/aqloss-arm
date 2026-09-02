@@ -1,0 +1,151 @@
+name: Build ARM64 AppImage
+
+# Builds an *unofficial* aarch64 (ARM64) AppImage of the Aqloss music
+# player (https://github.com/nokarin-dev/Aqloss), which upstream only
+# ships as x86_64.
+#
+# Runs natively on GitHub's arm64-hosted runner (ubuntu-24.04-arm) so
+# both the Flutter UI and the Rust audio engine are compiled directly
+# for aarch64 - no cross-compilation toolchain needed.
+#
+# Triggers:
+#   - schedule: checks a few times a day for a new upstream release
+#   - workflow_dispatch: build a specific tag on demand (or leave the
+#     "tag" input empty to build whatever is currently latest upstream)
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Aqloss tag to build (e.g. v0.3.1). Leave empty for latest upstream release."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-arm-appimage
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve target tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - name: Resolve upstream tag and check if already built
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG=$(gh api repos/nokarin-dev/Aqloss/releases/latest --jq .tag_name)
+          fi
+          echo "Upstream tag: ${TAG}"
+
+          RELEASE_TAG="arm64-${TAG}"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists here, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (aarch64)
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout packaging scripts (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout Aqloss source (${{ needs.resolve.outputs.tag }})
+        uses: actions/checkout@v4
+        with:
+          repository: nokarin-dev/Aqloss
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: aqloss-src
+
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev libpulse-dev \
+            dpkg-dev fakeroot wget file
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.x"
+          channel: stable
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aqloss-src/rust -> target
+
+      - name: Mark checkouts as safe git directories
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}/aqloss-src"
+          git config --global --add safe.directory '*'
+
+      - name: Flutter & cargokit dependencies
+        working-directory: aqloss-src
+        run: |
+          set -euo pipefail
+          if [ -d rust_builder/cargokit/build_tool ]; then
+            (cd rust_builder/cargokit/build_tool && flutter pub get)
+          fi
+          flutter pub get
+
+      - name: Build Linux app (release, native aarch64)
+        working-directory: aqloss-src
+        run: flutter build linux --release
+
+      - name: Package AppImage (aarch64)
+        working-directory: aqloss-src
+        run: |
+          bash "${GITHUB_WORKSPACE}/builder/scripts/package-appimage-arm.sh" \
+            "Aqloss-linux-arm64.AppImage"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqloss-${{ needs.resolve.outputs.tag }}-arm64-appimage
+          if-no-files-found: error
+          path: aqloss-src/Aqloss-linux-arm64.AppImage
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: arm64-${{ needs.resolve.outputs.tag }}
+          name: Aqloss ${{ needs.resolve.outputs.tag }} — Linux ARM64 AppImage (unofficial)
+          body: |
+            Unofficial ARM64 (aarch64) AppImage build of Aqloss ${{ needs.resolve.outputs.tag }}, compiled automatically from the upstream source at
+            https://github.com/nokarin-dev/Aqloss/releases/tag/${{ needs.resolve.outputs.tag }}
+
+            This build is not produced, reviewed, or endorsed by the Aqloss author. Report packaging issues here; report app bugs upstream.
+
+            Built natively on a `ubuntu-24.04-arm` GitHub Actions runner (no cross-compilation).
+          draft: false
+          prerelease: false
+          files: aqloss-src/Aqloss-linux-arm64.AppImage
+          token: ${{ secrets.GITHUB_TOKEN }}
